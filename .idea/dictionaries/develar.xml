@@ -120,6 +120,7 @@
       <w>libnss</w>
       <w>libunity</w>
       <w>libvpx</w>
+      <w>libxslt</w>
       <w>libxss</w>
       <w>libxtst</w>
       <w>licensepage</w>
@@ -208,10 +209,13 @@
       <w>uitk</w>
       <w>ulfo</w>
       <w>unassociate</w>
+      <w>unflatten</w>
       <w>unicon</w>
+      <w>uninstallation</w>
       <w>unmounting</w>
       <w>unorm</w>
       <w>unpage</w>
+      <w>unref</w>
       <w>unwelcomefinishpage</w>
       <w>userland</w>
       <w>userprofile</w>

@@ -1,8 +1,8 @@
 import { Arch, AsarOptions, AuthorMetadata, BeforeBuildContext, CompressionLevel, FileAssociation, FilePattern, MetadataDirectories, PlatformSpecificBuildOptions, Protocol, RepositoryInfo, Target } from "electron-builder-core"
 import { Publish } from "electron-builder-http/out/publishOptions"
-import { DebOptions, LinuxBuildOptions, SnapOptions } from "./options/linuxOptions"
+import { DebOptions, LinuxBuildOptions, LinuxTargetSpecificOptions, SnapOptions } from "./options/linuxOptions"
 import { DmgOptions, MacOptions, MasBuildOptions, PkgOptions } from "./options/macOptions"
-import { AppXOptions, NsisOptions, NsisWebOptions, SquirrelWindowsOptions, WinBuildOptions } from "./options/winOptions"
+import { AppXOptions, NsisOptions, NsisWebOptions, PortableOptions, SquirrelWindowsOptions, WinBuildOptions } from "./options/winOptions"
 import { PlatformPackager } from "./platformPackager"
 
 /**
@@ -35,7 +35,7 @@ export interface Metadata {
 
   /**
    * The url to the project [homepage](https://docs.npmjs.com/files/package.json#homepage) (NuGet Package `projectUrl` (optional) or Linux Package URL (required)).
-   * 
+   *
    * If not specified and your project repository is public on GitHub, it will be `https://github.com/${user}/${project}` by default.
    */
   readonly homepage?: string | null
@@ -201,28 +201,34 @@ export interface Config extends PlatformSpecificBuildOptions {
    * Whether to use [electron-compile](http://github.com/electron/electron-compile) to compile app. Defaults to `true` if `electron-compile` in the dependencies. And `false` if in the `devDependencies` or doesn't specified.
    */
   readonly electronCompile?: boolean
+
+  /**
+   * Whether to infer update channel from application version prerelease components. e.g. if version `0.12.1-alpha.1`, channel will be set to `alpha`. Otherwise to `latest`.
+   * @default true
+   */
+  readonly detectUpdateChannel?: boolean
   
   readonly mac?: MacOptions | null
   readonly mas?: MasBuildOptions | null
   readonly dmg?: DmgOptions | null
-  readonly pkg?: PkgOptions  | null
+  readonly pkg?: PkgOptions | null
 
-  readonly win?: WinBuildOptions  | null
-  readonly nsis?: NsisOptions  | null
-  readonly nsisWeb?: NsisWebOptions  | null
-  readonly portable?: NsisOptions  | null
-  readonly appx?: AppXOptions  | null
-  readonly squirrelWindows?: SquirrelWindowsOptions  | null
+  readonly win?: WinBuildOptions | null
+  readonly nsis?: NsisOptions | null
+  readonly nsisWeb?: NsisWebOptions | null
+  readonly portable?: PortableOptions | null
+  readonly appx?: AppXOptions | null
+  readonly squirrelWindows?: SquirrelWindowsOptions | null
 
   readonly linux?: LinuxBuildOptions | null
   readonly deb?: DebOptions | null
   readonly snap?: SnapOptions | null
-  readonly appimage?: LinuxBuildOptions | null
-  readonly pacman?: LinuxBuildOptions | null
-  readonly rpm?: LinuxBuildOptions | null
-  readonly freebsd?: LinuxBuildOptions | null
-  readonly p5p?: LinuxBuildOptions | null
-  readonly apk?: LinuxBuildOptions | null
+  readonly appimage?: LinuxTargetSpecificOptions | null
+  readonly pacman?: LinuxTargetSpecificOptions | null
+  readonly rpm?: LinuxTargetSpecificOptions | null
+  readonly freebsd?: LinuxTargetSpecificOptions | null
+  readonly p5p?: LinuxTargetSpecificOptions | null
+  readonly apk?: LinuxTargetSpecificOptions | null
   
   /**
    * @private

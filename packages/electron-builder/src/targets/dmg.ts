@@ -10,6 +10,7 @@ import * as path from "path"
 import sanitizeFileName from "sanitize-filename"
 import { DmgOptions, MacOptions } from "../options/macOptions"
 import { PlatformPackager } from "../platformPackager"
+import { addLicenseToDmg } from "./dmgLicense"
 
 export class DmgTarget extends Target {
   readonly options = this.packager.config.dmg
@@ -168,8 +169,14 @@ export class DmgTarget extends Target {
 
     // dmg file must not exist otherwise hdiutil failed (https://github.com/electron-userland/electron-builder/issues/1308#issuecomment-282847594), so, -ov must be specified
     //noinspection SpellCheckingInspection
-    await spawn("hdiutil", addVerboseIfNeed(["convert", tempDmg, "-ov", "-format", specification.format!, "-imagekey", `zlib-level=${process.env.ELECTRON_BUILDER_COMPRESSION_LEVEL || "9"}`, "-o", artifactPath]))
+    const args = ["convert", tempDmg, "-ov", "-format", specification.format!, "-o", artifactPath]
+    if (specification.format === "UDZO") {
+      args.push("-imagekey", `zlib-level=${process.env.ELECTRON_BUILDER_COMPRESSION_LEVEL || "9"}`)
+    }
+    await spawn("hdiutil", addVerboseIfNeed(args))
     await exec("hdiutil", addVerboseIfNeed(["internet-enable", "-no"]).concat(artifactPath))
+
+    await addLicenseToDmg(packager, artifactPath)
 
     this.packager.dispatchArtifactCreated(artifactPath, this, arch, `${appInfo.name}-${appInfo.version}.dmg`)
   }

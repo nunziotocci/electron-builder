@@ -29,7 +29,7 @@ export interface ExecOptions extends BaseExecOptions {
 }
 
 export function removePassword(input: string) {
-  return input.replace(/(-P |pass:| \/p|-pass )([^ ]+)/g, function (match, p1, p2) {
+  return input.replace(/(-P |pass:| \/p |-pass )([^ ]+)/g, function (match, p1, p2) {
     return `${p1}${createHash("sha256").update(p2).digest("hex")} (sha256 hash)`
   })
 }
@@ -83,14 +83,20 @@ export function doSpawn(command: string, args: Array<string>, options?: SpawnOpt
     options = {}
   }
   if (options.stdio == null) {
-    options.stdio = [pipeInput ? "pipe" : "ignore", debug.enabled ? "inherit" : "pipe", "pipe"]
+    options.stdio = [pipeInput ? "pipe" : "ignore", debug.enabled ? "inherit" : "pipe", debug.enabled ? "inherit" : "pipe"]
   }
 
   if (debug.enabled) {
     const argsString = args.join(" ")
     debug(`Spawning ${command} ${command === "docker" ? argsString : removePassword(argsString)}`)
   }
-  return _spawn(command, args, options)
+
+  try {
+    return _spawn(command, args, options)
+  }
+  catch (e) {
+    throw new Error(`Cannot spawn ${command}: ${e.stack || e}`)
+  }
 }
 
 export function spawn(command: string, args?: Array<string> | null, options?: SpawnOptions): Promise<any> {
@@ -123,12 +129,7 @@ export function handleProcess(event: string, childProcess: ChildProcess, command
 
     if (code !== 0) {
       function formatOut(text: string, title: string) {
-        if (text.length === 0) {
-          return ""
-        }
-        else {
-          return `\n${title}:\n${text}`
-        }
+        return text.length === 0 ? "" : `\n${title}:\n${text}`
       }
 
       reject(new Error(`${command} exited with code ${code}${formatOut(out, "Output")}${formatOut(errorOut, "Error output")}`))

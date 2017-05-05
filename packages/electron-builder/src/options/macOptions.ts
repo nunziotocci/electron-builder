@@ -3,7 +3,7 @@ import { PlatformSpecificBuildOptions, TargetConfig, TargetSpecificOptions } fro
 export type MacOsTargetName = "default" | "dmg" | "mas" | "pkg" | "7z" | "zip" | "tar.xz" | "tar.lz" | "tar.gz" | "tar.bz2" | "dir"
 
 /**
- * macOS Options
+ * macOS Options ([mac](#Config-mac)).
  */
 export interface MacOptions extends PlatformSpecificBuildOptions {
   /**
@@ -47,7 +47,7 @@ export interface MacOptions extends PlatformSpecificBuildOptions {
   readonly entitlementsInherit?: string | null
 
   /**
-   * The `CFBundleVersion`. Do not use it unless [you need to](see (https://github.com/electron-userland/electron-builder/issues/565#issuecomment-230678643)).
+   * The `CFBundleVersion`. Do not use it unless [you need to](https://github.com/electron-userland/electron-builder/issues/565#issuecomment-230678643).
    */
   readonly bundleVersion?: string | null
 
@@ -70,7 +70,7 @@ export interface MacOptions extends PlatformSpecificBuildOptions {
 }
 
 /**
- * `pkg` macOS Product Archive Options
+ * macOS Product Archive Options ([pkg](#Config-pkg)).
  */
 export interface PkgOptions extends TargetSpecificOptions {
   /**
@@ -98,7 +98,10 @@ export interface PkgOptions extends TargetSpecificOptions {
 }
 
 /**
- * `dmg` macOS DMG Options
+ * macOS DMG Options ([dmg](#Config-dmg)).
+ *
+ * To add license to DMG, create file `license_LANG_CODE.txt` in the build resources. Multiple license files in different languages are supported — use lang postfix (e.g. `_de`, `_ru`)). For example, create files `license_de.txt` and `license_en.txt` in the build resources.
+ * If OS language is german, `license_de.txt` will be displayed. See map of [language code to name](https://github.com/meikidd/iso-639-1/blob/master/src/data.js).
  */
 export interface DmgOptions extends TargetSpecificOptions {
   /**
@@ -197,7 +200,7 @@ export interface DmgContent {
 }
 
 /**
- * MAS (Mac Application Store) Options
+ * MAS (Mac Application Store) Options ([mas](#Config-mas)).
  */
 export interface MasBuildOptions extends MacOptions {
   /**

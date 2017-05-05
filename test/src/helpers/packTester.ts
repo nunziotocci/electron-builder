@@ -13,7 +13,6 @@ import pathSorter from "path-sort"
 import { parse as parsePlist } from "plist"
 import { CSC_LINK } from "./codeSignData"
 import { TEST_DIR } from "./config"
-import { expectedLinuxContents, expectedWinContents } from "./expectedContents"
 import { assertThat } from "./fileAssert"
 
 if (process.env.TRAVIS !== "true") {
@@ -25,10 +24,8 @@ const OUT_DIR_NAME = "dist"
 interface AssertPackOptions {
   readonly projectDirCreated?: (projectDir: string) => Promise<any>
   readonly packed?: (context: PackedContext) => Promise<any>
-  readonly expectedContents?: Array<string> | boolean
   readonly expectedArtifacts?: Array<string>
 
-  readonly expectedDepends?: string
   readonly checkMacApp?: (appDir: string, info: any) => Promise<any>
 
   readonly useTempDir?: boolean
@@ -163,7 +160,7 @@ async function packAndCheck(packagerOptions: PackagerOptions, checkOptions: Asse
   const {outDir, platformToTargets} = await packager.build()
   await publishManager.awaitTasks()
 
-  if (packagerOptions.platformPackagerFactory != null || packagerOptions.effectiveOptionComputed != null) {
+  if (packagerOptions.platformPackagerFactory != null) {
     return {packager, outDir}
   }
 
@@ -207,7 +204,7 @@ async function packAndCheck(packagerOptions: PackagerOptions, checkOptions: Asse
         await checkMacResult(packager, packagerOptions, checkOptions, packedAppDir)
       }
       else if (platform === Platform.LINUX) {
-        await checkLinuxResult(outDir, packager, checkOptions, arch, nameToTarget)
+        await checkLinuxResult(outDir, packager, arch, nameToTarget)
       }
       else if (platform === Platform.WINDOWS) {
         await checkWindowsResult(packager, checkOptions, artifacts.get(platform), nameToTarget)
@@ -218,38 +215,21 @@ async function packAndCheck(packagerOptions: PackagerOptions, checkOptions: Asse
   return {packager, outDir}
 }
 
-async function checkLinuxResult(outDir: string, packager: Packager, checkOptions: AssertPackOptions, arch: Arch, nameToTarget: Map<String, Target>) {
+async function checkLinuxResult(outDir: string, packager: Packager, arch: Arch, nameToTarget: Map<String, Target>) {
   if (!nameToTarget.has("deb")) {
     return
   }
 
   const appInfo = packager.appInfo
-  const productFilename = appInfo.productFilename
-  const expectedContents = pathSorter(expectedLinuxContents.map(it => {
-    if (it === "/opt/TestApp/TestApp") {
-      return `/opt/${productFilename}/TestApp`
-    }
-    else {
-      return it.replace(new RegExp("/opt/TestApp/", "g"), `/opt/${productFilename}/`)
-    }
-  }))
-
   const packageFile = `${outDir}/TestApp_${appInfo.version}_${arch === Arch.ia32 ? "i386" : (arch === Arch.x64 ? "amd64" : "armv7l")}.deb`
-  expect(await getContents(packageFile)).toEqual(expectedContents)
+  expect(await getContents(packageFile)).toMatchSnapshot()
   if (arch === Arch.ia32) {
-    expect(await getContents(`${outDir}/TestApp_${appInfo.version}_i386.deb`)).toEqual(expectedContents)
+    expect(await getContents(`${outDir}/TestApp_${appInfo.version}_i386.deb`)).toMatchSnapshot()
   }
 
-  expect(parseDebControl(await exec("dpkg", ["--info", packageFile]))).toMatchObject({
-    License: "MIT",
-    Homepage: "http://foo.example.com",
-    Maintainer: "Foo Bar <foo@example.com>",
-    Vendor: "Foo Bar <foo@example.com>",
-    Package: "testapp",
-    Description: " \n   Test Application (test quite “ #378)",
-    Depends: checkOptions == null || checkOptions.expectedDepends == null ? "gconf2, gconf-service, libnotify4, libappindicator1, libxtst6, libnss3" : checkOptions.expectedDepends,
-    Section: "devel",
-  })
+  const control = parseDebControl(await exec("dpkg", ["--info", packageFile]))
+  delete control.Version
+  expect(control).toMatchSnapshot()
 }
 
 function parseDebControl(info: string): any {
@@ -274,11 +254,12 @@ function parseDebControl(info: string): any {
 async function checkMacResult(packager: Packager, packagerOptions: PackagerOptions, checkOptions: AssertPackOptions, packedAppDir: string) {
   const appInfo = packager.appInfo
   const info = parsePlist(await readFile(path.join(packedAppDir, "Contents", "Info.plist"), "utf8"))
+
   expect(info).toMatchObject({
     CFBundleDisplayName: appInfo.productName,
     CFBundleIdentifier: "org.electron-builder.testApp",
     LSApplicationCategoryType: "your.app.category.type",
-    CFBundleVersion: `${appInfo.version}.${(process.env.TRAVIS_BUILD_NUMBER || process.env.CIRCLE_BUILD_NUM)}`
+    CFBundleVersion: info.CFBundleVersion === "50" ? "50" : `${appInfo.version}.${(process.env.TRAVIS_BUILD_NUMBER || process.env.CIRCLE_BUILD_NUM)}`
   })
 
   // checked manually, remove to avoid mismatch on CI server (where TRAVIS_BUILD_NUMBER is defined and different on each test run)
@@ -315,31 +296,9 @@ async function checkWindowsResult(packager: Packager, checkOptions: AssertPackOp
   const files = pathSorter(fileDescriptors.map(it => it.path.replace(/\\/g, "/")).filter(it => (!it.startsWith("lib/net45/locales/") || it === "lib/net45/locales/en-US.pak") && !it.endsWith(".psmdcp") && !it.endsWith("app-update.yml")))
 
   // console.log(JSON.stringify(files, null, 2))
-  const expectedContents = checkOptions == null || checkOptions.expectedContents == null ? expectedWinContents : checkOptions.expectedContents
-  if (expectedContents === true) {
-    expect(files).toMatchSnapshot()
-  }
-  else {
-    expect(files).toEqual(pathSorter((<Array<string>>expectedContents).map(it => {
-      if (it === "lib/net45/TestApp.exe") {
-        if (appInfo.productFilename === "Test App ßW") {
-          return `lib/net45/Test%20App%20%C3%9FW.exe`
-        }
-        return `lib/net45/${encodeURI(appInfo.productFilename).replace(/%5B/g, "[").replace(/%5D/g, "]")}.exe`
-      }
-      else if (it === "lib/net45/TestApp_ExecutionStub.exe") {
-        if (appInfo.productFilename === "Test App ßW") {
-          return `lib/net45/Test%20App%20%C3%9FW_ExecutionStub.exe`
-        }
-        return `lib/net45/${encodeURI(appInfo.productFilename).replace(/%5B/g, "[").replace(/%5D/g, "]")}_ExecutionStub.exe`
-      }
-      else {
-        return it
-      }
-    })))
-  }
+  expect(files).toMatchSnapshot()
 
-  if (checkOptions == null || checkOptions.expectedContents == null) {
+  if (checkOptions == null) {
     await unZipper.extractFile(fileDescriptors.filter(it => it.path === "TestApp.nuspec")[0], {
       path: path.dirname(packageFile),
     })

@@ -4,32 +4,86 @@ import { asArray, debug, doSpawn, exec, getPlatformIconFileName, handleProcess, 
 import { getBinFromBintray } from "electron-builder-util/out/binDownload"
 import { copyFile } from "electron-builder-util/out/fs"
 import { log, subTask, warn } from "electron-builder-util/out/log"
-import { readFile, unlink } from "fs-extra-p"
+import { asyncAll } from "electron-builder-util/out/promise"
+import { outputFile, readFile, unlink } from "fs-extra-p"
+import { safeLoad } from "js-yaml"
 import * as path from "path"
 import sanitizeFileName from "sanitize-filename"
 import { v5 as uuid5 } from "uuid-1345"
-import { NsisOptions } from "../options/winOptions"
+import { NsisOptions, PortableOptions } from "../options/winOptions"
 import { normalizeExt } from "../platformPackager"
 import { getSignVendorPath } from "../windowsCodeSign"
 import { WinPackager } from "../winPackager"
 import { archive } from "./archive"
+import { bundledLanguages, getLicenseFiles, lcid, toLangWithRegion } from "./license"
 
+// noinspection SpellCheckingInspection
 const ELECTRON_BUILDER_NS_UUID = "50e065bc-3134-11e6-9bab-38c9862bdaf3"
 
+// noinspection SpellCheckingInspection
 const nsisPathPromise = getBinFromBintray("nsis", "3.0.1.10", "302a8adebf0b553f74cddd494154a586719ff9d4767e94d8a76547a9bb06200c")
+// noinspection SpellCheckingInspection
 const nsisResourcePathPromise = getBinFromBintray("nsis-resources", "3.0.0", "cde0e77b249e29d74250bf006aa355d3e02b32226e1c6431fb48facae41d8a7e")
 
 const USE_NSIS_BUILT_IN_COMPRESSOR = false
 
-export default class NsisTarget extends Target {
+interface PackageFileInfo {
+  file: string
+}
+
+export class AppPackageHelper {
+  private readonly archToFileInfo = new Map<Arch, Promise<PackageFileInfo>>()
+  private readonly infoToIsDelete = new Map<PackageFileInfo, boolean>()
+
+  /** @private */
+  refCount = 0
+
+  async packArch(arch: Arch, target: NsisTarget) {
+    let infoPromise = this.archToFileInfo.get(arch)
+    if (infoPromise == null) {
+      infoPromise = subTask(`Packaging NSIS installer for arch ${Arch[arch]}`, target.buildAppPackage(target.archs.get(arch)!, arch))
+        .then(it => {return {file: it} })
+      this.archToFileInfo.set(arch, infoPromise)
+    }
+
+    const info = await infoPromise
+    if (target.isWebInstaller) {
+      this.infoToIsDelete.set(info, false)
+    }
+    else if (!this.infoToIsDelete.has(info)) {
+      this.infoToIsDelete.set(info, true)
+    }
+    return info.file
+  }
+
+  async finishBuild(): Promise<any> {
+    if (--this.refCount > 0) {
+      return
+    }
+
+    const filesToDelete: Array<string> = []
+    for (let [info, isDelete]  of this.infoToIsDelete.entries()) {
+      if (isDelete) {
+        filesToDelete.push(info.file)
+      }
+    }
+
+    await BluebirdPromise.map(filesToDelete, it => unlink(it))
+  }
+}
+
+export class NsisTarget extends Target {
   readonly options: NsisOptions
 
-  private archs: Map<Arch, string> = new Map()
+  /** @private */
+  readonly archs: Map<Arch, string> = new Map()
 
   private readonly nsisTemplatesDir = path.join(__dirname, "..", "..", "templates", "nsis")
 
-  constructor(protected readonly packager: WinPackager, readonly outDir: string, targetName: string) {
+  constructor(protected readonly packager: WinPackager, readonly outDir: string, targetName: string, protected readonly packageHelper: AppPackageHelper) {
     super(targetName)
+
+    this.packageHelper.refCount++
 
     let options = this.packager.config.nsis || Object.create(null)
     if (targetName !== "nsis") {
@@ -47,7 +101,8 @@ export default class NsisTarget extends Target {
     this.archs.set(arch, appOutDir)
   }
 
-  private async buildAppPackage(appOutDir: string, arch: Arch) {
+  /** @private */
+  async buildAppPackage(appOutDir: string, arch: Arch) {
     await BluebirdPromise.all([
       copyFile(path.join(await nsisPathPromise, "elevate.exe"), path.join(appOutDir, "resources", "elevate.exe"), null, false),
       copyFile(path.join(await getSignVendorPath(), "windows-10", Arch[arch], "signtool.exe"), path.join(appOutDir, "resources", "signtool.exe"), null, false),
@@ -59,16 +114,14 @@ export default class NsisTarget extends Target {
     return await archive(packager.config.compression, format, archiveFile, appOutDir, true)
   }
 
+  // noinspection JSUnusedGlobalSymbols
   async finishBuild(): Promise<any> {
     log("Building NSIS installer")
-    const filesToDelete: Array<string> = []
     try {
-      await this.buildInstaller(filesToDelete)
+      await this.buildInstaller()
     }
     finally {
-      if (filesToDelete.length > 0) {
-        await BluebirdPromise.map(filesToDelete, it => unlink(it))
-      }
+      await this.packageHelper.finishBuild()
     }
   }
 
@@ -80,7 +133,7 @@ export default class NsisTarget extends Target {
     return this.name === "portable"
   }
 
-  private async buildInstaller(filesToDelete: Array<string>): Promise<any> {
+  private async buildInstaller(): Promise<any> {
     const isPortable = this.isPortable
 
     const packager = this.packager
@@ -135,21 +188,21 @@ export default class NsisTarget extends Target {
     }
     else {
       await BluebirdPromise.map(this.archs.keys(), async arch => {
-        const file = await subTask(`Packaging NSIS installer for arch ${Arch[arch]}`, this.buildAppPackage(this.archs.get(arch)!, arch))
+        const file = await this.packageHelper.packArch(arch, this, )
         defines[arch === Arch.x64 ? "APP_64" : "APP_32"] = file
         defines[(arch === Arch.x64 ? "APP_64" : "APP_32") + "_NAME"] = path.basename(file)
 
         if (this.isWebInstaller) {
           packager.dispatchArtifactCreated(file, this, arch)
         }
-        else {
-          filesToDelete.push(file)
-        }
       })
     }
 
     this.configureDefinesForAllTypeOfInstaller(defines)
-    if (!isPortable) {
+    if (isPortable) {
+      defines.REQUEST_EXECUTION_LEVEL = (<PortableOptions>options).requestExecutionLevel || "user"
+    }
+    else {
       await this.configureDefines(oneClick, defines)
     }
 
@@ -187,7 +240,7 @@ export default class NsisTarget extends Target {
     return this.options.unicode == null ? true : this.options.unicode
   }
 
-  protected get isWebInstaller(): boolean {
+  get isWebInstaller(): boolean {
     return false
   }
 
@@ -345,7 +398,8 @@ export default class NsisTarget extends Target {
       const command = path.join(nsisPath, process.platform === "darwin" ? "mac" : (process.platform === "win32" ? "Bin" : "linux"), process.platform === "win32" ? "makensis.exe" : "makensis")
       const childProcess = doSpawn(command, args, {
         // we use NSIS_CONFIG_CONST_DATA_PATH=no to build makensis on Linux, but in any case it doesn't use stubs as MacOS/Windows version, so, we explicitly set NSISDIR
-        env: Object.assign({}, process.env, {NSISDIR: nsisPath}),
+        // set LC_CTYPE to avoid crash https://github.com/electron-userland/electron-builder/issues/503 Even "en_DE.UTF-8" leads to error.
+        env: Object.assign({}, process.env, {NSISDIR: nsisPath, LC_CTYPE: "en_US.UTF-8"}),
         cwd: this.nsisTemplatesDir,
       }, true)
       handleProcess("close", childProcess, command, resolve, error => {
@@ -356,82 +410,57 @@ export default class NsisTarget extends Target {
     })
   }
 
+  private async writeCustomLangFile(data: string) {
+    const file = await this.packager.getTempFile("messages.nsh")
+    await outputFile(file, data)
+    return file
+  }
+
   private async computeFinalScript(originalScript: string, isInstaller: boolean) {
     const packager = this.packager
-    let scriptHeader = `!addincludedir "${path.win32.join(__dirname, "..", "..", "templates", "nsis", "include")}"\n`
-    
-    const pluginArch = this.isUnicodeEnabled ? "x86-unicode" : "x86-ansi"
-    scriptHeader += `!addplugindir /${pluginArch} "${path.join(await nsisResourcePathPromise, "plugins", pluginArch)}"\n`
-    scriptHeader += `!addplugindir /${pluginArch} "${path.join(packager.buildResourcesDir, pluginArch)}"\n`
-    
-    // http://stackoverflow.com/questions/997456/nsis-license-file-based-on-language-selection
-    let licensePage: Array<string> | null
-    const license = await packager.getResource(this.options.license, "license.rtf", "license.txt", "eula.rtf", "eula.txt", "LICENSE.rtf", "LICENSE.txt", "EULA.rtf", "EULA.txt", "LICENSE.RTF", "LICENSE.TXT", "EULA.RTF", "EULA.TXT")
-    if (license == null) {
-      const licenseFiles = (await packager.resourceList)
-        .filter(it => {
-          const name = it.toLowerCase()
-          return (name.startsWith("license_") || name.startsWith("eula_")) && (name.endsWith(".rtf") || name.endsWith(".txt"))
-        })
-      
-      if (licenseFiles.length === 0) {
-        licensePage = null
-      }
-      else {
-        licensePage = []
-        const unspecifiedLangs = new Set(bundledLanguages)
+    let scriptHeader = `!addincludedir "${path.join(__dirname, "..", "..", "templates", "nsis", "include")}"\n`
 
-        let defaultFile: string | null = null
-        const sortedFiles = licenseFiles.sort((a, b) => {
-          const aW = a.includes("_en") ? 0 : 100
-          const bW = b.includes("_en") ? 0 : 100
-          return aW === bW ? a.localeCompare(b) : aW - bW
-        })
-        for (const file of sortedFiles) {
-          let lang = file.match(/_([^.]+)\./)![1]
-          let langWithRegion
-          if (lang.includes("_")) {
-            langWithRegion = lang
-          }
-          else {
-            lang = lang.toLowerCase()
-            langWithRegion = langToLangWithRegion.get(lang)
-            if (langWithRegion == null) {
-              langWithRegion = `${lang}_${lang.toUpperCase()}`
-            }
-          }
-          
-          unspecifiedLangs.delete(langWithRegion)
-          const fullFile = path.join(packager.buildResourcesDir, file)
-          if (defaultFile == null) {
-            defaultFile = fullFile
-          }
-          licensePage.push(`LicenseLangString MUILicense ${lcid[langWithRegion] || lang} "${fullFile}"`)
-        }
-        
-        for (const l of unspecifiedLangs) {
-          licensePage.push(`LicenseLangString MUILicense ${lcid[l]} "${defaultFile}"`)
-        }
-        
-        licensePage.push('!insertmacro MUI_PAGE_LICENSE "$(MUILicense)"')
+    const addCustomMessageFileInclude = async (input: string) => {
+      return '!include "' + await this.writeCustomLangFile(computeCustomMessageTranslations(safeLoad(await readFile(path.join(this.nsisTemplatesDir, input), "utf-8"))).join("\n")) + '"\n'
+    }
+
+    const tasks: Array<() => Promise<any>> = [
+      async () => {
+        const pluginArch = this.isUnicodeEnabled ? "x86-unicode" : "x86-ansi"
+        let result = `!addplugindir /${pluginArch} "${path.join(await nsisResourcePathPromise, "plugins", pluginArch)}"\n`
+        result += `!addplugindir /${pluginArch} "${path.join(packager.buildResourcesDir, pluginArch)}"\n`
+        return result
+      },
+      async () => {
+        // http://stackoverflow.com/questions/997456/nsis-license-file-based-on-language-selection
+        const licensePage = await this.computeLicensePage()
+        return licensePage == null ? "" : createMacro("licensePage", licensePage)
+      },
+      () => addCustomMessageFileInclude("messages.yml"),
+    ]
+
+    if (!this.isPortable) {
+      if (this.options.oneClick === false) {
+        tasks.push(() => addCustomMessageFileInclude("boringMessages.yml"))
       }
+
+      tasks.push(async () => {
+        let result = ""
+        const customInclude = await packager.getResource(this.options.include, "installer.nsh")
+        if (customInclude != null) {
+          result += `!addincludedir "${packager.buildResourcesDir}"\n`
+          result += `!include "${customInclude}"\n\n`
+        }
+        return result
+      })
     }
-    else {
-      licensePage = [`!insertmacro MUI_PAGE_LICENSE "${license}"`]
-    }
-    
-    if (licensePage != null) {
-      scriptHeader += createMacro("licensePage", licensePage)
+
+    for (const s of await asyncAll(tasks)) {
+      scriptHeader += s
     }
 
     if (this.isPortable) {
       return scriptHeader + originalScript
-    }
-
-    const customInclude = await packager.getResource(this.options.include, "installer.nsh")
-    if (customInclude != null) {
-      scriptHeader += `!addincludedir "${packager.buildResourcesDir}"\n`
-      scriptHeader += `!include "${customInclude}"\n\n`
     }
 
     const fileAssociations = packager.fileAssociations
@@ -476,219 +505,60 @@ export default class NsisTarget extends Target {
 
     return scriptHeader + originalScript
   }
+
+  private async computeLicensePage(): Promise<Array<string> | null> {
+    const packager = this.packager
+
+    const license = await packager.getResource(this.options.license, "license.rtf", "license.txt", "eula.rtf", "eula.txt", "LICENSE.rtf", "LICENSE.txt", "EULA.rtf", "EULA.txt", "LICENSE.RTF", "LICENSE.TXT", "EULA.RTF", "EULA.TXT")
+    if (license != null) {
+      return [`!insertmacro MUI_PAGE_LICENSE "${license}"`]
+    }
+
+    const licenseFiles = await getLicenseFiles(packager)
+    if (licenseFiles.length === 0) {
+      return null
+    }
+
+    const licensePage: Array<string> = []
+    const unspecifiedLangs = new Set(bundledLanguages)
+
+    let defaultFile: string | null = null
+    for (const item of licenseFiles) {
+      unspecifiedLangs.delete(item.langWithRegion)
+      if (defaultFile == null) {
+        defaultFile = item.file
+      }
+      licensePage.push(`LicenseLangString MUILicense ${lcid[item.langWithRegion] || item.lang} "${item.file}"`)
+    }
+
+    for (const l of unspecifiedLangs) {
+      licensePage.push(`LicenseLangString MUILicense ${lcid[l]} "${defaultFile}"`)
+    }
+
+    licensePage.push('!insertmacro MUI_PAGE_LICENSE "$(MUILicense)"')
+    return licensePage
+  }
+}
+
+function computeCustomMessageTranslations(messages: any): Array<string> {
+  const result: Array<string> = []
+  for (const messageId of Object.keys(messages)) {
+    const langToTranslations = messages[messageId]
+    const unspecifiedLangs = new Set(bundledLanguages)
+    for (const lang of Object.keys(langToTranslations)) {
+      const langWithRegion = toLangWithRegion(lang)
+      result.push(`LangString ${messageId} ${lcid[langWithRegion]} "${langToTranslations[lang].replace(/\n/g, "$\\r$\\n")}"`)
+      unspecifiedLangs.delete(langWithRegion)
+    }
+
+    const defaultTranslation = langToTranslations["en"].replace(/\n/g, "$\\r$\\n")
+    for (const langWithRegion of unspecifiedLangs) {
+      result.push(`LangString ${messageId} ${lcid[langWithRegion]} "${defaultTranslation}"`)
+    }
+  }
+  return result
 }
 
 function createMacro(name: string, lines: Array<string>) {
   return `\n!macro ${name}\n  ${lines.join("\n  ")}\n!macroend\n`
-}
-
-const lcid: any = {
-	"af_ZA": 1078,
-	"am_ET": 1118,
-	"ar_AE": 14337,
-	"ar_BH": 15361,
-	"ar_DZ": 5121,
-	"ar_EG": 3073,
-	"ar_IQ": 2049,
-	"ar_JO": 11265,
-	"ar_KW": 13313,
-	"ar_LB": 12289,
-	"ar_LY": 4097,
-	"ar_MA": 6145,
-	"ar_OM": 8193,
-	"ar_QA": 16385,
-	"ar_SA": 1025,
-	"ar_SY": 10241,
-	"ar_TN": 7169,
-	"ar_YE": 9217,
-	"arn_CL": 1146,
-	"as_IN": 1101,
-	"az_AZ": 2092,
-	"ba_RU": 1133,
-	"be_BY": 1059,
-	"bg_BG": 1026,
-	"bn_IN": 1093,
-	"bo_BT": 2129,
-	"bo_CN": 1105,
-	"br_FR": 1150,
-	"bs_BA": 8218,
-	"ca_ES": 1027,
-	"co_FR": 1155,
-	"cs_CZ": 1029,
-	"cy_GB": 1106,
-	"da_DK": 1030,
-	"de_AT": 3079,
-	"de_CH": 2055,
-	"de_DE": 1031,
-	"de_LI": 5127,
-	"de_LU": 4103,
-	"div_MV": 1125,
-	"dsb_DE": 2094,
-	"el_GR": 1032,
-	"en_AU": 3081,
-	"en_BZ": 10249,
-	"en_CA": 4105,
-	"en_CB": 9225,
-	"en_GB": 2057,
-	"en_IE": 6153,
-	"en_IN": 18441,
-	"en_JA": 8201,
-	"en_MY": 17417,
-	"en_NZ": 5129,
-	"en_PH": 13321,
-	"en_TT": 11273,
-	"en_US": 1033,
-	"en_ZA": 7177,
-	"en_ZW": 12297,
-	"es_AR": 11274,
-	"es_BO": 16394,
-	"es_CL": 13322,
-	"es_CO": 9226,
-	"es_CR": 5130,
-	"es_DO": 7178,
-	"es_EC": 12298,
-	"es_ES": 3082,
-	"es_GT": 4106,
-	"es_HN": 18442,
-	"es_MX": 2058,
-	"es_NI": 19466,
-	"es_PA": 6154,
-	"es_PE": 10250,
-	"es_PR": 20490,
-	"es_PY": 15370,
-	"es_SV": 17418,
-	"es_UR": 14346,
-	"es_US": 21514,
-	"es_VE": 8202,
-	"et_EE": 1061,
-	"eu_ES": 1069,
-	"fa_IR": 1065,
-	"fi_FI": 1035,
-	"fil_PH": 1124,
-	"fo_FO": 1080,
-	"fr_BE": 2060,
-	"fr_CA": 3084,
-	"fr_CH": 4108,
-	"fr_FR": 1036,
-	"fr_LU": 5132,
-	"fr_MC": 6156,
-	"fy_NL": 1122,
-	"ga_IE": 2108,
-	"gbz_AF": 1164,
-	"gl_ES": 1110,
-	"gsw_FR": 1156,
-	"gu_IN": 1095,
-	"ha_NG": 1128,
-	"he_IL": 1037,
-	"hi_IN": 1081,
-	"hr_BA": 4122,
-	"hr_HR": 1050,
-	"hu_HU": 1038,
-	"hy_AM": 1067,
-	"id_ID": 1057,
-	"ii_CN": 1144,
-	"is_IS": 1039,
-	"it_CH": 2064,
-	"it_IT": 1040,
-	"iu_CA": 2141,
-	"ja_JP": 1041,
-	"ka_GE": 1079,
-	"kh_KH": 1107,
-	"kk_KZ": 1087,
-	"kl_GL": 1135,
-	"kn_IN": 1099,
-	"ko_KR": 1042,
-	"kok_IN": 1111,
-	"ky_KG": 1088,
-	"lb_LU": 1134,
-	"lo_LA": 1108,
-	"lt_LT": 1063,
-	"lv_LV": 1062,
-	"mi_NZ": 1153,
-	"mk_MK": 1071,
-	"ml_IN": 1100,
-	"mn_CN": 2128,
-	"mn_MN": 1104,
-	"moh_CA": 1148,
-	"mr_IN": 1102,
-	"ms_BN": 2110,
-	"ms_MY": 1086,
-	"mt_MT": 1082,
-	"my_MM": 1109,
-	"nb_NO": 1044,
-	"ne_NP": 1121,
-	"nl_BE": 2067,
-	"nl_NL": 1043,
-	"nn_NO": 2068,
-	"ns_ZA": 1132,
-	"oc_FR": 1154,
-	"or_IN": 1096,
-	"pa_IN": 1094,
-	"pl_PL": 1045,
-	"ps_AF": 1123,
-	"pt_BR": 1046,
-	"pt_PT": 2070,
-	"qut_GT": 1158,
-	"quz_BO": 1131,
-	"quz_EC": 2155,
-	"quz_PE": 3179,
-	"rm_CH": 1047,
-	"ro_RO": 1048,
-	"ru_RU": 1049,
-	"rw_RW": 1159,
-	"sa_IN": 1103,
-	"sah_RU": 1157,
-	"se_FI": 3131,
-	"se_NO": 1083,
-	"se_SE": 2107,
-	"si_LK": 1115,
-	"sk_SK": 1051,
-	"sl_SI": 1060,
-	"sma_NO": 6203,
-	"sma_SE": 7227,
-	"smj_NO": 4155,
-	"smj_SE": 5179,
-	"smn_FI": 9275,
-	"sms_FI": 8251,
-	"sq_AL": 1052,
-	"sr_BA": 7194,
-	"sr_SP": 3098,
-	"sv_FI": 2077,
-	"sv_SE": 1053,
-	"sw_KE": 1089,
-	"syr_SY": 1114,
-	"ta_IN": 1097,
-	"te_IN": 1098,
-	"tg_TJ": 1064,
-	"th_TH": 1054,
-	"tk_TM": 1090,
-	"tmz_DZ": 2143,
-	"tn_ZA": 1074,
-	"tr_TR": 1055,
-	"tt_RU": 1092,
-	"ug_CN": 1152,
-	"uk_UA": 1058,
-	"ur_IN": 2080,
-	"ur_PK": 1056,
-	"uz_UZ": 2115,
-	"vi_VN": 1066,
-	"wen_DE": 1070,
-	"wo_SN": 1160,
-	"xh_ZA": 1076,
-	"yo_NG": 1130,
-	"zh_CHS": 4,
-	"zh_CHT": 31748,
-	"zh_CN": 2052,
-	"zh_HK": 3076,
-	"zh_MO": 5124,
-	"zh_SG": 4100,
-	"zh_TW": 1028,
-	"zu_ZA": 1077
-}
-
-// "el_GR" "lv_LV" "ko_KR" "tr_TR"
-const bundledLanguages = ["en_US", "de_DE", "fr_FR", "es_ES", "zh_CN", "zh_TW", "ja_JP", "it_IT", "nl_NL", "ru_RU", "pl_PL", "uk_UA", "cs_CZ", "sv_SE", "nb_NO", "da_DK", "pt_PT"]
-const langToLangWithRegion = new Map<string, string>()
-for (const id of bundledLanguages) {
-  langToLangWithRegion.set(id.substring(0, id.indexOf("_")), id)
 }

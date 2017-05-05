@@ -2,10 +2,10 @@ import BluebirdPromise from "bluebird-lst"
 import { Platform } from "electron-builder"
 import { PlatformPackager } from "electron-builder/out/platformPackager"
 import { attachAndExecute } from "electron-builder/out/targets/dmg"
-import { copy, remove } from "fs-extra-p"
+import { copy, remove, writeFile } from "fs-extra-p"
 import * as path from "path"
 import { assertThat } from "../helpers/fileAssert"
-import { app, assertPack } from "../helpers/packTester"
+import { app, assertPack, copyTestAsset } from "../helpers/packTester"
 
 test.ifMac("no build directory", app({
   targets: Platform.MAC.createTarget("dmg"),
@@ -29,6 +29,7 @@ test.ifAll.ifMac("custom background - new way", () => {
   return assertPack("test-app-one", {
     targets: Platform.MAC.createTarget(),
     config: {
+      publish: null,
       mac: {
         icon: "customIcon"
       },
@@ -58,6 +59,7 @@ test.ifMac("no Applications link", () => {
   return assertPack("test-app-one", {
     targets: Platform.MAC.createTarget(),
     config: {
+      publish: null,
       productName: "NoApplicationsLink",
       dmg: {
         "contents": [
@@ -131,6 +133,7 @@ test.ifAll.ifMac("disable dmg icon (light), bundleVersion", () => {
   return assertPack("test-app-one", {
     targets: Platform.MAC.createTarget(),
     config: {
+      publish: null,
       dmg: {
         icon: null,
       },
@@ -146,3 +149,34 @@ test.ifAll.ifMac("disable dmg icon (light), bundleVersion", () => {
     },
   })
 })
+
+test.ifAll.ifMac("multi language license", app({
+  targets: Platform.MAC.createTarget("dmg"),
+}, {
+  projectDirCreated: projectDir => {
+    return BluebirdPromise.all([
+      writeFile(path.join(projectDir, "build", "license_en.txt"), "Hi"),
+      writeFile(path.join(projectDir, "build", "license_ru.txt"), "Привет"),
+    ])
+  },
+}))
+
+test.ifAll.ifMac("license ru", app({
+  targets: Platform.MAC.createTarget("dmg"),
+}, {
+  projectDirCreated: projectDir => {
+    return BluebirdPromise.all([
+      writeFile(path.join(projectDir, "build", "license_ru.txt"), "Привет".repeat(12)),
+    ])
+  },
+}))
+
+test.ifAll.ifMac("license en", app({
+  targets: Platform.MAC.createTarget("dmg"),
+}, {
+  projectDirCreated: projectDir => {
+    return BluebirdPromise.all([
+      copyTestAsset("license_en.txt", path.join(projectDir, "build", "license_en.txt")),
+    ])
+  },
+}))

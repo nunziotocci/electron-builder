@@ -22,8 +22,6 @@ export interface PublishConfiguration {
    * The owner.
    */
   readonly owner?: string | null
-
-  readonly token?: string | null
 }
 
 /**
@@ -92,7 +90,8 @@ export interface GenericServerOptions extends PublishConfiguration {
  * Amazon S3 options. `https` must be used, so, if you use direct Amazon S3 endpoints, format `https://s3.amazonaws.com/bucket_name` [must be used](http://stackoverflow.com/a/11203685/1910191). And do not forget to make files/directories public.
  * 
  * AWS credentials are required, please see [getting your credentials](http://docs.aws.amazon.com/sdk-for-javascript/v2/developer-guide/getting-your-credentials.html).
- * Define `AWS_SECRET_ACCESS_KEY` and `AWS_ACCESS_KEY_ID` [environment variables](http://docs.aws.amazon.com/sdk-for-javascript/v2/developer-guide/loading-node-credentials-environment.html). Or in the [~/.aws/credentials](http://docs.aws.amazon.com/sdk-for-javascript/v2/developer-guide/loading-node-credentials-shared.html).
+ * Define `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` [environment variables](http://docs.aws.amazon.com/sdk-for-javascript/v2/developer-guide/loading-node-credentials-environment.html).
+ * Or in the [~/.aws/credentials](http://docs.aws.amazon.com/sdk-for-javascript/v2/developer-guide/loading-node-credentials-shared.html).
  */
 export interface S3Options extends PublishConfiguration {
   /**
@@ -171,6 +170,8 @@ export interface BintrayOptions extends PublishConfiguration {
    * The Bintray user account. Used in cases where the owner is an organization.
    */
   readonly user?: string | null
+
+  readonly token?: string | null
 }
 
 export interface VersionInfo {

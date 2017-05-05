@@ -3,7 +3,7 @@ import { Arch, DIR_TARGET, Platform, Target } from "electron-builder-core"
 import { exec, isPullRequest } from "electron-builder-util"
 import { deepAssign } from "electron-builder-util/out/deepAssign"
 import { log, task, warn } from "electron-builder-util/out/log"
-import { signAsync, SignOptions } from "electron-macos-sign"
+import { signAsync, SignOptions } from "electron-osx-sign"
 import { ensureDir } from "fs-extra-p"
 import * as path from "path"
 import { AppInfo } from "./appInfo"
@@ -14,6 +14,9 @@ import { PlatformPackager } from "./platformPackager"
 import { DmgTarget } from "./targets/dmg"
 import { PkgTarget, prepareProductBuildArgs } from "./targets/pkg"
 import { createCommonTarget, NoOpTarget } from "./targets/targetFactory"
+
+const buildForPrWarning = "There are serious security concerns with CSC_FOR_PULL_REQUEST=true (see the  CircleCI documentation (https://circleci.com/docs/1.0/fork-pr-builds/) for details)" +
+  "\nIf you have SSH keys, sensitive env vars or AWS credentials stored in your project settings and untrusted forks can make pull requests against your repo, then this option isn't for you."
 
 export default class MacPackager extends PlatformPackager<MacOptions> {
   readonly codeSigningInfo: Promise<CodeSigningInfo>
@@ -115,9 +118,18 @@ export default class MacPackager extends PlatformPackager<MacOptions> {
       warn("macOS application code signing is supported only on macOS, skipping.")
       return
     }
+
     if (isPullRequest()) {
-      log("Current build is a part of pull request, code signing will be skipped")
-      return
+      if (process.env.CSC_FOR_PULL_REQUEST === "true") {
+        warn(buildForPrWarning)
+      }
+      else {
+        // https://github.com/electron-userland/electron-builder/issues/1524
+        log("Current build is a part of pull request, code signing will be skipped." +
+          "\nSet env CSC_FOR_PULL_REQUEST to true to force code signing." +
+          `\n${buildForPrWarning}`)
+        return
+      }
     }
 
     const keychainName = (await this.codeSigningInfo).keychainName

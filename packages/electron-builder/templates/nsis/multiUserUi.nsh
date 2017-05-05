@@ -77,9 +77,9 @@ Var RadioButtonLabel1
 				Abort
 			${endif}
 
-      !insertmacro MUI_HEADER_TEXT "Choose Uninstallation Options" "Which installation should be removed?"
+      !insertmacro MUI_HEADER_TEXT "$(chooseUninstallationOptions)" "$(whichInstallationShouldBeRemoved)"
 		!else
-      !insertmacro MUI_HEADER_TEXT "Choose Installation Options" "Who should this application be installed for?"
+      !insertmacro MUI_HEADER_TEXT "$(chooseInstallationOptions)" "$(whoShouldThisApplicationBeInstalledFor)"
 		!endif
 
     !insertmacro MUI_PAGE_FUNCTION_CUSTOM PRE
@@ -87,13 +87,13 @@ Var RadioButtonLabel1
 		Pop $MultiUser.InstallModePage
 
 		!ifndef BUILD_UNINSTALLER
-			${NSD_CreateLabel} 0u 0u 300u 20u "Please select whether you wish to make this software available to all users or just yourself"
-			StrCpy $8 "Anyone who uses this computer (&all users)"
-			StrCpy $9 "Only for &me"
+			${NSD_CreateLabel} 0u 0u 300u 20u "$(selectUserMode)"
+			StrCpy $8 "$(forAll)"
+			StrCpy $9 "$(onlyForMe)"
 		!else
-			${NSD_CreateLabel} 0u 0u 300u 20u "This software is installed both per-machine (all users) and per-user. $\r$\nWhich installation you wish to remove?"
-			StrCpy $8 "Anyone who uses this computer (&all users)"
-			StrCpy $9 "Only for &me"
+			${NSD_CreateLabel} 0u 0u 300u 20u "$(whichInstallationRemove)"
+			StrCpy $8 "$(forAll)"
+			StrCpy $9 "$(onlyForMe)"
 		!endif
 		Pop $MultiUser.InstallModePage.Text
 
@@ -153,7 +153,7 @@ Var RadioButtonLabel1
             ${EndIf}
             ${If} $1 = 3 ;RunAs completed successfully, but with a non-admin user
             ${OrIf} $2 = 0x666666 ;our special return, the new process was not admin after all
-              MessageBox mb_IconStop|mb_TopMost|mb_SetForeground "You need to login with an account that is a member of the admin group to continue..."
+              MessageBox mb_IconStop|mb_TopMost|mb_SetForeground "$(loginWithAdminAccount)"
             ${EndIf}
             ${Break}
           ${Case} 1223 ;user aborted
@@ -198,7 +198,7 @@ Var RadioButtonLabel1
 					StrCpy $7 "There is a per-user installation. ($perUserInstallationFolder)$\r$\nWill uninstall."
 				!endif
 			${else}
-				StrCpy $7 "Fresh install for current user only."
+				StrCpy $7 "$(freshInstallForCurrent)"
 			${endif}
 			SendMessage $0 ${BCM_SETSHIELD} 0 0 ; hide SHIELD
 		${else} ; all users
@@ -209,7 +209,7 @@ Var RadioButtonLabel1
 					StrCpy $7 "There is a per-machine installation. ($perMachineInstallationFolder)$\r$\nWill uninstall."
 				!endif
 			${else}
-				StrCpy $7 "Fresh install for all users"
+				StrCpy $7 "$(freshInstallForAll)"
 			${endif}
 			${ifNot} ${UAC_IsAdmin}
 				StrCpy $7 "$7 (will prompt for admin credentials)"

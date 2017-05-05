@@ -15,16 +15,21 @@ if (process.env.ELECTRON_BUILDER_OFFLINE === "true") {
 
 const tmpDir = new TmpDir()
 
-const g = (<any>global)
-g.__test_app = {
-  getVersion: function () {
-    return "0.0.1"
-  },
+function createTestApp(version: string) {
+  return {
+    getVersion: () => version,
 
-  on: function () {
-    // ignored
-  },
+    getAppPath: function () {
+    },
+
+    on: function () {
+      // ignored
+    },
+  }
 }
+
+const g = (<any>global)
+g.__test_app = createTestApp("0.0.1")
 
 process.env.TEST_UPDATER_PLATFORM = "win32"
 
@@ -38,18 +43,9 @@ test("check updates - no versions at all", async () => {
   await assertThat(updater.checkForUpdates()).throws()
 })
 
-// test("cannot find suitable file for version", async () => {
-//   const updater = new NsisUpdater(<BintrayOptions>{
-//     provider: "bintray",
-//     owner: "actperepo",
-//     package: "incorrect-file-version",
-//   })
-//
-//   await assertThat(updater.checkForUpdates()).throws()
-// })
-
-test("file url", async () => {
-  const updater = new NsisUpdater()
+async function testUpdateFromBintray(app: any) {
+  const updater = new NsisUpdater(null, app)
+  updater.allowDowngrade = true
   updater.updateConfigPath = await writeUpdateConfig(<BintrayOptions>{
     provider: "bintray",
     owner: "actperepo",
@@ -69,7 +65,56 @@ test("file url", async () => {
   await assertThat(path.join(await updateCheckResult.downloadPromise)).isFile()
 
   expect(actualEvents).toEqual(expectedEvents)
+}
+test("file url", () => testUpdateFromBintray(null))
+
+test("downgrade (disallowed)", async () => {
+  const updater = new NsisUpdater(null, createTestApp("2.0.0"))
+  updater.updateConfigPath = await writeUpdateConfig(<BintrayOptions>{
+    provider: "bintray",
+    owner: "actperepo",
+    package: "TestApp",
+  })
+
+  const actualEvents: Array<string> = []
+  const expectedEvents = ["checking-for-update", "update-not-available"]
+  for (const eventName of expectedEvents) {
+    updater.addListener(eventName, () => {
+      actualEvents.push(eventName)
+    })
+  }
+
+  const updateCheckResult = await updater.checkForUpdates()
+  expect(updateCheckResult.fileInfo).toMatchSnapshot()
+  expect(updateCheckResult.downloadPromise).toBeUndefined()
+
+  expect(actualEvents).toEqual(expectedEvents)
 })
+
+test("downgrade (disallowed, beta)", async () => {
+  const updater = new NsisUpdater(null, createTestApp("1.5.2-beta.4"))
+  updater.updateConfigPath = await writeUpdateConfig(<GithubOptions>{
+    provider: "github",
+    owner: "develar",
+    repo: "__test_nsis_release",
+  })
+
+  const actualEvents: Array<string> = []
+  const expectedEvents = ["checking-for-update", "update-not-available"]
+  for (const eventName of expectedEvents) {
+    updater.addListener(eventName, () => {
+      actualEvents.push(eventName)
+    })
+  }
+
+  const updateCheckResult = await updater.checkForUpdates()
+  expect(updateCheckResult.fileInfo).toMatchSnapshot()
+  expect(updateCheckResult.downloadPromise).toBeUndefined()
+
+  expect(actualEvents).toEqual(expectedEvents)
+})
+
+test("downgrade (allowed)", () => testUpdateFromBintray(createTestApp("2.0.0-beta.1")))
 
 test("file url generic", async () => {
   const updater = new NsisUpdater()
@@ -149,7 +194,7 @@ test("file url github", async () => {
   updater.updateConfigPath = await writeUpdateConfig(<GithubOptions>{
       provider: "github",
       owner: "develar",
-      repo: "__test_nsis_release",
+        repo: "__test_nsis_release",
     })
 
   const actualEvents: Array<string> = []
@@ -162,6 +207,31 @@ test("file url github", async () => {
 
   const updateCheckResult = await updater.checkForUpdates()
   expect(updateCheckResult.fileInfo).toMatchSnapshot()
+  await assertThat(path.join(await updateCheckResult.downloadPromise)).isFile()
+
+  expect(actualEvents).toEqual(expectedEvents)
+})
+
+test("file url github pre-release", async () => {
+  const updater = new NsisUpdater(null, createTestApp("1.5.0-beta.1"))
+  updater.updateConfigPath = await writeUpdateConfig(<GithubOptions>{
+      provider: "github",
+      owner: "develar",
+        repo: "__test_nsis_release",
+    })
+
+  const actualEvents: Array<string> = []
+  const expectedEvents = ["checking-for-update", "update-available", "update-downloaded"]
+  for (const eventName of expectedEvents) {
+    updater.addListener(eventName, () => {
+      actualEvents.push(eventName)
+    })
+  }
+
+  const updateCheckResult = await updater.checkForUpdates()
+  expect(updateCheckResult.fileInfo).toMatchSnapshot()
+  expect(updateCheckResult.versionInfo).toMatchSnapshot()
+
   await assertThat(path.join(await updateCheckResult.downloadPromise)).isFile()
 
   expect(actualEvents).toEqual(expectedEvents)

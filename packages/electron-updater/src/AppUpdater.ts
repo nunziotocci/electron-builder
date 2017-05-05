@@ -6,7 +6,7 @@ import { EventEmitter } from "events"
 import { readFile } from "fs-extra-p"
 import { safeLoad } from "js-yaml"
 import * as path from "path"
-import { gt as isVersionGreaterThan, valid as parseVersion } from "semver"
+import { eq as isVersionsEqual, gt as isVersionGreaterThan, prerelease as getVersionPreleaseComponents, valid as parseVersion } from "semver"
 import "source-map-support/register"
 import { FileInfo, Provider, UpdateCheckResult, UpdaterSignal } from "./api"
 import { BintrayProvider } from "./BintrayProvider"
@@ -25,9 +25,22 @@ export interface Logger {
 
 export abstract class AppUpdater extends EventEmitter {
   /**
-   * Automatically download an update when it is found.
+   * Whether to automatically download an update when it is found.
    */
   autoDownload = true
+
+  /**
+   * *GitHub provider only.* Whether to allow update to pre-release versions. Defaults to `true` if application version contains prerelease components (e.g. `0.12.1-alpha.1`, here `alpha` is a prerelease component), otherwise `false`.
+   *
+   * If `true`, downgrade will be allowed (`allowDowngrade` will be set to `true`).
+   */
+  allowPrerelease = false
+
+  /**
+   * Whether to allow version downgrade (when a user from the beta channel wants to go back to the stable channel).
+   * @default false
+   */
+  allowDowngrade = false
 
   /**
    *  The request headers.
@@ -64,7 +77,9 @@ export abstract class AppUpdater extends EventEmitter {
   protected versionInfo: VersionInfo | null
   private fileInfo: FileInfo | null
 
-  constructor(options: PublishConfiguration | null | undefined) {
+  private currentVersion: string
+
+  constructor(options: PublishConfiguration | null | undefined, app?: any) {
     super()
 
     this.on("error", (error: Error) => {
@@ -73,8 +88,8 @@ export abstract class AppUpdater extends EventEmitter {
       }
     })
 
-    if ((<any>global).__test_app != null) {
-      this.app = (<any>global).__test_app
+    if (app != null || (<any>global).__test_app != null) {
+      this.app = app || (<any>global).__test_app
       this.untilAppReady = BluebirdPromise.resolve()
     }
     else {
@@ -95,6 +110,14 @@ export abstract class AppUpdater extends EventEmitter {
         }
       })
     }
+
+    const currentVersionString = this.app.getVersion()
+    this.currentVersion = parseVersion(currentVersionString)
+    if (this.currentVersion == null) {
+      throw new Error(`App version is not valid semver version: "${currentVersionString}`)
+    }
+
+    this.allowPrerelease = hasPrereleaseComponents(this.currentVersion)
 
     if (options != null) {
       this.setFeedURL(options)
@@ -117,7 +140,7 @@ export abstract class AppUpdater extends EventEmitter {
       client = new GenericProvider({provider: "generic", url: options})
     }
     else {
-      client = createClient(options)
+      client = this.createClient(options)
     }
     this.clientPromise = BluebirdPromise.resolve(client)
   }
@@ -159,7 +182,7 @@ export abstract class AppUpdater extends EventEmitter {
 
   private async doCheckForUpdates(): Promise<UpdateCheckResult> {
     if (this.clientPromise == null) {
-      this.clientPromise = this.loadUpdateConfig().then(it => createClient(it))
+      this.clientPromise = this.loadUpdateConfig().then(it => this.createClient(it))
     }
 
     const client = await this.clientPromise
@@ -171,16 +194,10 @@ export abstract class AppUpdater extends EventEmitter {
       throw new Error(`Latest version (from update server) is not valid semver version: "${latestVersion}`)
     }
 
-    const currentVersionString = this.app.getVersion()
-    const currentVersion = parseVersion(currentVersionString)
-    if (currentVersion == null) {
-      throw new Error(`App version is not valid semver version: "${currentVersion}`)
-    }
-
-    if (!isVersionGreaterThan(latestVersion, currentVersion)) {
+    if (this.allowDowngrade && !hasPrereleaseComponents(latestVersion) ? isVersionsEqual(latestVersion, this.currentVersion) : !isVersionGreaterThan(latestVersion, this.currentVersion)) {
       this.updateAvailable = false
       if (this.logger != null) {
-        this.logger.info(`Update for version ${currentVersionString} is not available (latest version: ${versionInfo.version})`)
+        this.logger.info(`Update for version ${this.currentVersion} is not available (latest version: ${versionInfo.version}, downgrade is ${this.allowDowngrade ? "allowed" : "disallowed"}.`)
       }
       this.emit("update-not-available", versionInfo)
       return {
@@ -257,7 +274,7 @@ export abstract class AppUpdater extends EventEmitter {
 
   async loadUpdateConfig() {
     if (this._appUpdateConfigPath == null) {
-      this._appUpdateConfigPath = path.join(process.resourcesPath, "app-update.yml")
+      this._appUpdateConfigPath = require("electron-is-dev") ? path.join(this.app.getAppPath(), "dev-app-update.yml") : path.join(process.resourcesPath, "app-update.yml")
     }
     return safeLoad(await readFile(this._appUpdateConfigPath, "utf-8"))
   }
@@ -269,41 +286,46 @@ export abstract class AppUpdater extends EventEmitter {
     }
     return requestHeaders
   }
-}
 
-function createClient(data: string | PublishConfiguration) {
-  if (typeof data === "string") {
-    throw new Error("Please pass PublishConfiguration object")
-  }
-
-  const provider = (<PublishConfiguration>data).provider
-  switch (provider) {
-    case "github":
-      const githubOptions = <GithubOptions>data
-      const token = (githubOptions.private ? process.env.GH_TOKEN : null) || githubOptions.token
-      if (token == null) {
-        return new GitHubProvider(githubOptions)
-      }
-      else {
-        return new PrivateGitHubProvider(githubOptions, token)
-      }
-      
-    case "s3": {
-      const s3 = <S3Options>data
-      return new GenericProvider({
-        provider: "generic",
-        url: s3Url(s3),
-        channel: s3.channel || ""
-      })
+  private createClient(data: string | PublishConfiguration) {
+    if (typeof data === "string") {
+      throw new Error("Please pass PublishConfiguration object")
     }
 
-    case "generic":
-      return new GenericProvider(<GenericServerOptions>data)
+    const provider = (<PublishConfiguration>data).provider
+    switch (provider) {
+      case "github":
+        const githubOptions = <GithubOptions>data
+        const token = (githubOptions.private ? process.env.GH_TOKEN : null) || githubOptions.token
+        if (token == null) {
+          return new GitHubProvider(githubOptions, this)
+        }
+        else {
+          return new PrivateGitHubProvider(githubOptions, token)
+        }
 
-    case "bintray":
-      return new BintrayProvider(<BintrayOptions>data)
+      case "s3": {
+        const s3 = <S3Options>data
+        return new GenericProvider({
+          provider: "generic",
+          url: s3Url(s3),
+          channel: s3.channel || ""
+        })
+      }
 
-    default:
-      throw new Error(`Unsupported provider: ${provider}`)
+      case "generic":
+        return new GenericProvider(<GenericServerOptions>data)
+
+      case "bintray":
+        return new BintrayProvider(<BintrayOptions>data)
+
+      default:
+        throw new Error(`Unsupported provider: ${provider}`)
+    }
   }
+}
+
+function hasPrereleaseComponents(version: string) {
+  const versionPrereleaseComponent = getVersionPreleaseComponents(version)
+  return versionPrereleaseComponent != null && versionPrereleaseComponent.length > 0
 }

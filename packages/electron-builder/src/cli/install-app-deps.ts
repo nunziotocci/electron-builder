@@ -21,13 +21,14 @@ async function main() {
 
   const projectDir = process.cwd()
   const config = (await loadConfig(projectDir)) || {}
-  const results: Array<string> = await BluebirdPromise.all([
+  const muonVersion = config.muonVersion
+  const results = await BluebirdPromise.all<string>([
     computeDefaultAppDirectory(projectDir, use(config.directories, it => it!.app)),
-    getElectronVersion(config, projectDir)
+    muonVersion == null ? getElectronVersion(config, projectDir) : BluebirdPromise.resolve(muonVersion),
   ])
 
   // if two package.json — force full install (user wants to install/update app deps in addition to dev)
-  await installOrRebuild(config, results[0], results[1], args.platform, args.arch, results[0] !== projectDir)
+  await installOrRebuild(config, results[0], {version: results[1], useCustomDist: muonVersion == null}, args.platform, args.arch, results[0] !== projectDir)
 }
 
 main()
